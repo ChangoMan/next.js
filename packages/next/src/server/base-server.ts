@@ -491,14 +491,14 @@ export default abstract class Server<ServerOptions extends Options = Options> {
     // Start route compilation. We don't wait for the routes to finish loading
     // because we use the `waitTillReady` promise below in `handleRequest` to
     // wait. Also we can't `await` in the constructor.
-    void this.matchers.reload()
+    void this.matchers.load()
 
     this.setAssetPrefix(assetPrefix)
     this.responseCache = this.getResponseCache({ dev })
   }
 
   protected reloadMatchers() {
-    return this.matchers.reload()
+    return this.matchers.forceReload()
   }
 
   protected async handleNextDataRequest(
@@ -651,11 +651,7 @@ export default abstract class Server<ServerOptions extends Options = Options> {
 
     // Match api routes under `pages/api/`.
     matchers.push(
-      new PagesAPIRouteMatcherProvider(
-        this.distDir,
-        manifestLoader,
-        this.i18nProvider
-      )
+      new PagesAPIRouteMatcherProvider(this.distDir, manifestLoader)
     )
 
     // If the app directory is enabled, then add the app matchers and handlers.
@@ -896,6 +892,7 @@ export default abstract class Server<ServerOptions extends Options = Options> {
           let srcPathname = matchedPath
           const match = await this.matchers.match(matchedPath, {
             i18n: localeAnalysisResult,
+            matchedOutput: undefined,
           })
 
           // Update the source pathname to the matched page's pathname.
@@ -2558,6 +2555,7 @@ export default abstract class Server<ServerOptions extends Options = Options> {
 
     const options: MatchOptions = {
       i18n: this.i18nProvider?.fromQuery(pathname, query),
+      matchedOutput: undefined,
     }
 
     try {

@@ -1,20 +1,24 @@
-/* eslint-disable @typescript-eslint/no-unused-vars */
+import type { RouteMatcherProvider } from '../route-matcher-providers/route-matcher-provider'
+import type { RouteMatch } from '../route-matches/route-match'
+import type { RouteMatcher } from '../route-matchers/route-matcher'
+import type { MatchOptions, RouteMatcherManager } from './route-matcher-manager'
+import type { RouteDefinition } from '../route-definitions/route-definition'
+import type { Normalizer } from '../normalizers/normalizer'
 
 import { isDynamicRoute } from '../../../shared/lib/router/utils'
 import { RouteKind } from '../route-kind'
-import { RouteMatch } from '../route-matches/route-match'
-import { RouteDefinition } from '../route-definitions/route-definition'
-import { RouteMatcherProvider } from '../route-matcher-providers/route-matcher-provider'
-import { RouteMatcher } from '../route-matchers/route-matcher'
-import { MatchOptions, RouteMatcherManager } from './route-matcher-manager'
 import { getSortedRoutes } from '../../../shared/lib/router/utils'
 import { LocaleRouteMatcher } from '../route-matchers/locale-route-matcher'
-import { ensureLeadingSlash } from '../../../shared/lib/page-path/ensure-leading-slash'
+import {
+  MatchOptionsNormalizer,
+  NormalizedMatchOptions,
+} from '../normalizers/match-options-normalizer'
 
-interface RouteMatchers {
+type RouteMatchers = {
   static: ReadonlyArray<RouteMatcher>
   dynamic: ReadonlyArray<RouteMatcher>
-  duplicates: Record<string, ReadonlyArray<RouteMatcher>>
+  duplicates: ReadonlyMap<string, ReadonlyArray<RouteMatcher>>
+  outputs: ReadonlyMap<string, ReadonlyArray<RouteMatcher>>
 }
 
 export class DefaultRouteMatcherManager implements RouteMatcherManager {
@@ -22,9 +26,13 @@ export class DefaultRouteMatcherManager implements RouteMatcherManager {
   protected readonly matchers: RouteMatchers = {
     static: [],
     dynamic: [],
-    duplicates: {},
+    duplicates: new Map(),
+    outputs: new Map(),
   }
   private lastCompilationID = this.compilationID
+
+  private readonly normalizer: Normalizer<NormalizedMatchOptions> =
+    new MatchOptionsNormalizer()
 
   /**
    * When this value changes, it indicates that a change has been introduced
@@ -42,12 +50,23 @@ export class DefaultRouteMatcherManager implements RouteMatcherManager {
     }
   }
 
+  private reloadHasBeenCalled = false
+  public async load(): Promise<void> {
+    // If the matchers have already been loaded, and we're not forcing a reload,
+    // exit now.
+    if (this.reloadHasBeenCalled) return
+    this.reloadHasBeenCalled = true
+
+    await this.forceReload()
+  }
+
   private previousMatchers: ReadonlyArray<RouteMatcher> = []
-  public async reload() {
+  public async forceReload(): Promise<void> {
     let callbacks: { resolve: Function; reject: Function }
     this.waitTillReadyPromise = new Promise((resolve, reject) => {
       callbacks = { resolve, reject }
     })
+    this.reloadHasBeenCalled = true
 
     // Grab the compilation ID for this run, we'll verify it at the end to
     // ensure that if any routes were added before reloading is finished that
@@ -64,13 +83,15 @@ export class DefaultRouteMatcherManager implements RouteMatcherManager {
 
       // Use this to detect duplicate pathnames.
       const all = new Map<string, RouteMatcher>()
-      const duplicates: Record<string, RouteMatcher[]> = {}
+      const duplicates = new Map<string, RouteMatcher[]>()
+      const outputs = new Map<string, RouteMatcher[]>()
       for (const providerMatchers of providersMatchers) {
         for (const matcher of providerMatchers) {
           // Reset duplicated matches when reloading from pages conflicting state.
           if (matcher.duplicated) delete matcher.duplicated
+
           // Test to see if the matcher being added is a duplicate.
-          const duplicate = all.get(matcher.definition.pathname)
+          const duplicate = all.get(matcher.output)
           if (duplicate) {
             // This looks a little weird, but essentially if the pathname
             // already exists in the duplicates map, then we got that array
@@ -84,11 +105,9 @@ export class DefaultRouteMatcherManager implements RouteMatcherManager {
             // the retrieval of the `other` will actually return the array
             // reference used by all other duplicates. This is why ReadonlyArray
             // is so important! Array's are always references!
-            const others = duplicates[matcher.definition.pathname] ?? [
-              duplicate,
-            ]
+            const others = duplicates.get(matcher.output) ?? [duplicate]
             others.push(matcher)
-            duplicates[matcher.definition.pathname] = others
+            duplicates.set(matcher.output, others)
 
             // Add duplicated details to each route.
             duplicate.duplicated = others
@@ -100,7 +119,16 @@ export class DefaultRouteMatcherManager implements RouteMatcherManager {
           matchers.push(matcher)
 
           // Add the matcher's pathname to the set.
-          all.set(matcher.definition.pathname, matcher)
+          all.set(matcher.output, matcher)
+
+          // Get all the matchers for the output. These represent all the
+          // matchers that share the same output.
+          let matched = outputs.get(matcher.output)
+          if (!matched) {
+            matched = []
+            outputs.set(matcher.output, matched)
+          }
+          matched.push(matcher)
         }
       }
 
@@ -121,6 +149,9 @@ export class DefaultRouteMatcherManager implements RouteMatcherManager {
       }
       this.previousMatchers = matchers
 
+      // Update the matcher outputs reference.
+      this.matchers.outputs = outputs
+
       // For matchers that are for static routes, filter them now.
       this.matchers.static = matchers.filter((matcher) => !matcher.isDynamic)
 
@@ -140,17 +171,19 @@ export class DefaultRouteMatcherManager implements RouteMatcherManager {
         const pathname = dynamic[index].definition.pathname
 
         // Grab the index in the dynamic array, push it into the reference.
-        const indexes = reference.get(pathname) ?? []
+        let indexes = reference.get(pathname)
+        if (!indexes) {
+          // If we couldn't get a reference for this then this is the first
+          // time we've seen this pathname, so create a new array and set it. We
+          // mutate the array later, so we don't need to set it again as it's
+          // a reference.
+          indexes = []
+          reference.set(pathname, indexes)
+
+          // Push the pathname into the array of pathnames.
+          pathnames.push(pathname)
+        }
         indexes.push(index)
-
-        // If this is the first one set it. If it isn't, we don't need to
-        // because pushing above on the array will mutate the array already
-        // stored there because array's are always a reference!
-        if (indexes.length === 1) reference.set(pathname, indexes)
-        // Otherwise, continue, we've already added this pathname before.
-        else continue
-
-        pathnames.push(pathname)
       }
 
       // Sort the array of pathnames.
@@ -190,32 +223,8 @@ export class DefaultRouteMatcherManager implements RouteMatcherManager {
     }
   }
 
-  public push(provider: RouteMatcherProvider): void {
-    this.providers.push(provider)
-  }
-
-  public async test(pathname: string, options: MatchOptions): Promise<boolean> {
-    // See if there's a match for the pathname...
-    const match = await this.match(pathname, options)
-
-    // This default implementation only needs to check to see if there _was_ a
-    // match. The development matcher actually changes it's behavior by not
-    // recompiling the routes.
-    return match !== null
-  }
-
-  public async match(
-    pathname: string,
-    options: MatchOptions
-  ): Promise<RouteMatch<RouteDefinition<RouteKind>> | null> {
-    // "Iterate" over the match options. Once we found a single match, exit with
-    // it, otherwise return null below. If no match is found, the inner block
-    // won't be called.
-    for await (const match of this.matchAll(pathname, options)) {
-      return match
-    }
-
-    return null
+  public push(...providers: ReadonlyArray<RouteMatcherProvider>): void {
+    this.providers.push(...providers)
   }
 
   /**
@@ -227,22 +236,41 @@ export class DefaultRouteMatcherManager implements RouteMatcherManager {
    * @returns the match if found
    */
   protected validate(
-    pathname: string,
     matcher: RouteMatcher,
-    options: MatchOptions
+    normalized: NormalizedMatchOptions
   ): RouteMatch | null {
-    if (matcher instanceof LocaleRouteMatcher) {
-      return matcher.match(pathname, options)
+    if (LocaleRouteMatcher.is(matcher)) {
+      if (!normalized.options.i18n) {
+        throw new Error(
+          'Invariant: expected locale matcher to have locale information for matching'
+        )
+      }
+
+      return matcher.match(normalized.options.i18n)
     }
 
     // If the locale was inferred from the default locale, then it will have
     // already added a locale to the pathname. We need to remove it before
     // matching because this matcher is not locale aware.
-    if (options.i18n?.inferredFromDefault) {
-      return matcher.match(options.i18n.pathname)
+    if (normalized.options.i18n?.inferredFromDefault) {
+      return matcher.match({ pathname: normalized.options.i18n.pathname })
     }
 
-    return matcher.match(pathname)
+    return matcher.match(normalized)
+  }
+
+  public async match(
+    pathname: string,
+    info: MatchOptions
+  ): Promise<RouteMatch | null> {
+    // "Iterate" over the match options. Once we found a single match, exit with
+    // it, otherwise return null below. If no match is found, the inner block
+    // won't be called.
+    for await (const match of this.matchAll(pathname, info)) {
+      return match
+    }
+
+    return null
   }
 
   public async *matchAll(
@@ -261,8 +289,34 @@ export class DefaultRouteMatcherManager implements RouteMatcherManager {
       )
     }
 
-    // Ensure that path matching is done with a leading slash.
-    pathname = ensureLeadingSlash(pathname)
+    // Normalize the pathname and options.
+    const normalized = this.normalizer.normalize({ pathname, options })
+
+    // If a definition pathname was provided, get the match for it, and only it.
+    if (normalized.options.matchedOutput) {
+      // Get the matcher for the definition pathname.
+      const matchers = this.matchers.outputs.get(
+        normalized.options.matchedOutput
+      )
+
+      // There was no matchers for this output.
+      if (!matchers) return null
+
+      // Loop over the matchers, yielding the first match, it should only match
+      // once.
+      for (const matcher of matchers) {
+        const match = this.validate(matcher, normalized)
+        if (!match) continue
+
+        // We found a match, so yield it and exit.
+        yield match
+
+        return null
+      }
+
+      // We didn't find a match, so exit.
+      return null
+    }
 
     // If this pathname doesn't look like a dynamic route, and this pathname is
     // listed in the normalized list of routes, then return it. This ensures
@@ -270,19 +324,16 @@ export class DefaultRouteMatcherManager implements RouteMatcherManager {
     // with the list of normalized routes.
     if (!isDynamicRoute(pathname)) {
       for (const matcher of this.matchers.static) {
-        const match = this.validate(pathname, matcher, options)
+        const match = this.validate(matcher, normalized)
         if (!match) continue
 
         yield match
       }
     }
 
-    // If we should skip handling dynamic routes, exit now.
-    if (options?.skipDynamic) return null
-
     // Loop over the dynamic matchers, yielding each match.
     for (const matcher of this.matchers.dynamic) {
-      const match = this.validate(pathname, matcher, options)
+      const match = this.validate(matcher, normalized)
       if (!match) continue
 
       yield match

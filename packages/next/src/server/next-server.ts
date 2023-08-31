@@ -830,6 +830,7 @@ export default class NextNodeServer extends BaseServer {
 
       const options: MatchOptions = {
         i18n: this.i18nProvider?.fromQuery(pathname, query),
+        matchedOutput: undefined,
       }
       const match = await this.matchers.match(pathname, options)
 

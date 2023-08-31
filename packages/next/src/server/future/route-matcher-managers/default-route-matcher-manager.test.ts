@@ -1,33 +1,47 @@
 import { AppPageRouteDefinition } from '../route-definitions/app-page-route-definition'
 import { LocaleRouteDefinition } from '../route-definitions/locale-route-definition'
-import { PagesRouteDefinition } from '../route-definitions/pages-route-definition'
+import { PagesLocaleRouteDefinition } from '../route-definitions/pages-route-definition'
 import { RouteKind } from '../route-kind'
 import { RouteMatcherProvider } from '../route-matcher-providers/route-matcher-provider'
+import { DefaultRouteMatcher } from '../route-matchers/default-route-matcher'
 import { LocaleRouteMatcher } from '../route-matchers/locale-route-matcher'
-import { RouteMatcher } from '../route-matchers/route-matcher'
 import { DefaultRouteMatcherManager } from './default-route-matcher-manager'
 import { MatchOptions } from './route-matcher-manager'
 
 describe('DefaultRouteMatcherManager', () => {
   it('will throw an error when used before it has been reloaded', async () => {
     const manager = new DefaultRouteMatcherManager()
-    await expect(manager.match('/some/not/real/path', {})).resolves.toEqual(
-      null
-    )
+    await expect(
+      manager.match('/some/not/real/path', {
+        i18n: undefined,
+        matchedOutput: undefined,
+      })
+    ).resolves.toEqual(null)
     manager.push({ matchers: jest.fn(async () => []) })
-    await expect(manager.match('/some/not/real/path', {})).rejects.toThrow()
-    await manager.reload()
-    await expect(manager.match('/some/not/real/path', {})).resolves.toEqual(
-      null
-    )
+    await expect(
+      manager.match('/some/not/real/path', {
+        i18n: undefined,
+        matchedOutput: undefined,
+      })
+    ).rejects.toThrow()
+    await manager.load()
+    await expect(
+      manager.match('/some/not/real/path', {
+        i18n: undefined,
+        matchedOutput: undefined,
+      })
+    ).resolves.toEqual(null)
   })
 
   it('will not error and not match when no matchers are provided', async () => {
     const manager = new DefaultRouteMatcherManager()
-    await manager.reload()
-    await expect(manager.match('/some/not/real/path', {})).resolves.toEqual(
-      null
-    )
+    await manager.load()
+    await expect(
+      manager.match('/some/not/real/path', {
+        i18n: undefined,
+        matchedOutput: undefined,
+      })
+    ).resolves.toEqual(null)
   })
 
   it.each<{
@@ -43,15 +57,17 @@ describe('DefaultRouteMatcherManager', () => {
           pathname: '/some/path',
           inferredFromDefault: false,
         },
+        matchedOutput: undefined,
       },
       definition: {
         kind: RouteKind.PAGES,
         filename: '',
         bundlePath: '',
         page: '',
-        pathname: '/some/path',
+        pathname: '/nl-NL/some/path',
         i18n: {
-          locale: 'nl-NL',
+          pathname: '/some/path',
+          detectedLocale: 'nl-NL',
         },
       },
     },
@@ -63,15 +79,17 @@ describe('DefaultRouteMatcherManager', () => {
           pathname: '/some/path',
           inferredFromDefault: false,
         },
+        matchedOutput: undefined,
       },
       definition: {
         kind: RouteKind.PAGES,
         filename: '',
         bundlePath: '',
         page: '',
-        pathname: '/some/path',
+        pathname: '/en-US/some/path',
         i18n: {
-          locale: 'en-US',
+          detectedLocale: 'en-US',
+          pathname: '/some/path',
         },
       },
     },
@@ -79,18 +97,21 @@ describe('DefaultRouteMatcherManager', () => {
       pathname: '/some/path',
       options: {
         i18n: {
+          detectedLocale: undefined,
           pathname: '/some/path',
           inferredFromDefault: false,
         },
+        matchedOutput: undefined,
       },
       definition: {
         kind: RouteKind.PAGES,
         filename: '',
         bundlePath: '',
         page: '',
-        pathname: '/some/path',
+        pathname: '/en-US/some/path',
         i18n: {
-          locale: 'en-US',
+          detectedLocale: 'en-US',
+          pathname: '/some/path',
         },
       },
     },
@@ -104,7 +125,7 @@ describe('DefaultRouteMatcherManager', () => {
         matchers: jest.fn(async () => [matcher]),
       }
       manager.push(provider)
-      await manager.reload()
+      await manager.load()
 
       const match = await manager.match(pathname, options)
       expect(match?.definition).toBe(definition)
@@ -113,14 +134,15 @@ describe('DefaultRouteMatcherManager', () => {
 
   it('calls the locale route matcher when one is provided', async () => {
     const manager = new DefaultRouteMatcherManager()
-    const definition: PagesRouteDefinition = {
+    const definition: PagesLocaleRouteDefinition = {
       kind: RouteKind.PAGES,
       filename: '',
       bundlePath: '',
       page: '',
-      pathname: '/some/path',
+      pathname: '/en-US/some/path',
       i18n: {
-        locale: 'en-US',
+        detectedLocale: 'en-US',
+        pathname: '/some/path',
       },
     }
     const matcher = new LocaleRouteMatcher(definition)
@@ -128,7 +150,7 @@ describe('DefaultRouteMatcherManager', () => {
       matchers: jest.fn(async () => [matcher]),
     }
     manager.push(provider)
-    await manager.reload()
+    await manager.load()
 
     const options: MatchOptions = {
       i18n: {
@@ -136,6 +158,7 @@ describe('DefaultRouteMatcherManager', () => {
         pathname: '/some/path',
         inferredFromDefault: false,
       },
+      matchedOutput: undefined,
     }
     const match = await manager.match('/en-US/some/path', options)
     expect(match?.definition).toBe(definition)
@@ -151,12 +174,12 @@ describe('DefaultRouteMatcherManager', () => {
       pathname: '/some/path',
       appPaths: [],
     }
-    const matcher = new RouteMatcher(definition)
+    const matcher = new DefaultRouteMatcher(definition)
     const provider: RouteMatcherProvider = {
       matchers: jest.fn(async () => [matcher]),
     }
     manager.push(provider)
-    await manager.reload()
+    await manager.load()
 
     const options: MatchOptions = {
       i18n: {
@@ -164,6 +187,7 @@ describe('DefaultRouteMatcherManager', () => {
         pathname: '/some/path',
         inferredFromDefault: true,
       },
+      matchedOutput: undefined,
     }
     const match = await manager.match('/en-US/some/path', options)
     expect(match?.definition).toBe(definition)
