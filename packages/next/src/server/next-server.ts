@@ -553,7 +553,8 @@ export default class NextNodeServer extends BaseServer {
 
   protected async renderPageComponent(
     ctx: RequestContext,
-    bubbleNoFallback: boolean
+    bubbleNoFallback: boolean,
+    match: RouteMatch | undefined
   ) {
     const edgeFunctionsPages = this.getEdgeFunctionsPages() || []
     if (edgeFunctionsPages.length) {
@@ -581,7 +582,7 @@ export default class NextNodeServer extends BaseServer {
       }
     }
 
-    return super.renderPageComponent(ctx, bubbleNoFallback)
+    return super.renderPageComponent(ctx, bubbleNoFallback, match)
   }
 
   protected async findPageComponents({
@@ -589,6 +590,7 @@ export default class NextNodeServer extends BaseServer {
     query,
     params,
     isAppPath,
+    match,
   }: {
     pathname: string
     query: NextParsedUrlQuery
@@ -599,6 +601,7 @@ export default class NextNodeServer extends BaseServer {
     sriEnabled?: boolean
     appPaths?: ReadonlyArray<string> | null
     shouldEnsure: boolean
+    match: RouteMatch | undefined
   }): Promise<FindComponentsResult | null> {
     return getTracer().trace(
       NextNodeServerSpan.findPageComponents,
@@ -614,6 +617,7 @@ export default class NextNodeServer extends BaseServer {
           query,
           params,
           isAppPath,
+          match,
         })
     )
   }
@@ -623,11 +627,13 @@ export default class NextNodeServer extends BaseServer {
     query,
     params,
     isAppPath,
+    match,
   }: {
     pathname: string
     query: NextParsedUrlQuery
     params: Params
     isAppPath: boolean
+    match: RouteMatch | undefined
   }): Promise<FindComponentsResult | null> {
     const paths: string[] = [pathname]
     if (query.amp) {
@@ -638,7 +644,7 @@ export default class NextNodeServer extends BaseServer {
       )
     }
 
-    if (query.__nextLocale) {
+    if (!isAppPath && query.__nextLocale) {
       paths.unshift(
         ...paths.map(
           (path) => `/${query.__nextLocale}${path === '/' ? '' : path}`
@@ -652,9 +658,11 @@ export default class NextNodeServer extends BaseServer {
           distDir: this.distDir,
           pathname: pagePath,
           isAppPath,
+          match,
         })
 
         if (
+          !isAppPath &&
           query.__nextLocale &&
           typeof components.Component === 'string' &&
           !pagePath.startsWith(`/${query.__nextLocale}`)
@@ -813,7 +821,8 @@ export default class NextNodeServer extends BaseServer {
   protected async handleCatchallRenderRequest(
     req: BaseNextRequest,
     res: BaseNextResponse,
-    parsedUrl: NextUrlWithParsedQuery
+    parsedUrl: NextUrlWithParsedQuery,
+    match: RouteMatch | null
   ) {
     let { pathname, query } = parsedUrl
     if (!pathname) {
@@ -828,11 +837,14 @@ export default class NextNodeServer extends BaseServer {
       // next.js core assumes page path without trailing slash
       pathname = removeTrailingSlash(pathname)
 
-      const options: MatchOptions = {
-        i18n: this.i18nProvider?.fromQuery(pathname, query),
-        matchedOutput: undefined,
+      // If a match wasn't provided, try to find one.
+      if (!match) {
+        const options: MatchOptions = {
+          i18n: this.i18nProvider?.fromQuery(pathname, query),
+          matchedOutput: undefined,
+        }
+        match = await this.matchers.match(pathname, options)
       }
-      const match = await this.matchers.match(pathname, options)
 
       // If we don't have a match, try to render it anyways.
       if (!match) {
