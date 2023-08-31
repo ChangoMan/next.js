@@ -2553,26 +2553,20 @@ export default abstract class Server<ServerOptions extends Options = Options> {
     delete query[NEXT_RSC_UNION_QUERY]
     delete query._nextBubbleNoFallback
 
+    const matchedOutput =
+      !this.minimalMode &&
+      this.isRenderWorker &&
+      typeof ctx.req.headers['x-invoke-output'] === 'string'
+        ? ctx.req.headers['x-invoke-output']
+        : undefined
+
     const options: MatchOptions = {
       i18n: this.i18nProvider?.fromQuery(pathname, query),
-      matchedOutput: undefined,
+      matchedOutput,
     }
 
     try {
       for await (const match of this.matchers.matchAll(pathname, options)) {
-        // when a specific invoke-output is meant to be matched
-        // ensure a prior dynamic route/page doesn't take priority
-        const invokeOutput = ctx.req.headers['x-invoke-output']
-        if (
-          !this.minimalMode &&
-          this.isRenderWorker &&
-          typeof invokeOutput === 'string' &&
-          isDynamicRoute(invokeOutput || '') &&
-          invokeOutput !== match.definition.pathname
-        ) {
-          continue
-        }
-
         const result = await this.renderPageComponent(
           {
             ...ctx,
